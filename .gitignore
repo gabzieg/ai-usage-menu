@@ -6,6 +6,6 @@ xcuserdata/
 *.xccheckout
 *.xcscmblueprint
 *.ipa
+*.app/
 *.dSYM
 *.dSYM.zip
-
