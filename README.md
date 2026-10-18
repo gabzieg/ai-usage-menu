@@ -26,14 +26,31 @@ The app reuses the accounts already authenticated in local command-line clients.
 
 The app searches common executable locations such as `~/.local/bin`, `~/.npm-global/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`.
 
-## Build and run
+## Clone and run
+
+The repository is build-ready. The Xcode project, macOS target, shared scheme,
+asset catalog, app icon, and menu bar configuration are already committed. You
+do not need to create or configure any of them after cloning.
 
 1. Clone the repository.
-2. Open `Untitled Project.xcodeproj` in Xcode.
-3. Select the `Untitled Project` scheme.
-4. Build and run the macOS app.
+2. Open the existing `Untitled Project.xcodeproj` file in Xcode.
+3. Use the existing shared `Untitled Project` scheme and choose **My Mac** as
+   the run destination.
+4. Press **Run** (`Command-R`).
 
-The built product is named **AI Usage Menu**. The internal Xcode project and target names are still retained to avoid a noisy project-file migration in the first public version.
+The built product is named **AI Usage Menu**. The internal Xcode project and
+target names are retained for compatibility with the first public version.
+
+Cloning provides the complete source project, not an installed application.
+Xcode is required only to compile the source. After building, the generated
+`AI Usage Menu.app` runs independently and Xcode can remain closed.
+
+## Prebuilt application
+
+There is currently no signed public binary in GitHub Releases. The locally
+built app uses ad hoc signing, which is appropriate for the Mac that built it
+but would be blocked by Gatekeeper on other Macs. A downloadable release will
+require a Developer ID certificate and Apple notarization.
 
 No developer account is required for a local Debug build. Distribution requires your own signing identity and bundle identifier.
 
@@ -58,7 +75,7 @@ Collectors run independently when the app starts, every five minutes, and when t
 - Claude and Gemini collectors parse terminal interfaces. UI changes in their CLIs can require parser updates.
 - The Gemini collector currently targets the quota view exposed by the `agy` Antigravity client.
 - The app must run without App Sandbox so it can locate and launch locally installed CLIs and let them access their existing authentication state.
-- There is no release updater yet. GitHub Releases and repository notifications are the source of update information.
+- There is no automatic updater or signed public release yet. Repository notifications are the current source of update information.
 - Automated parser tests have not been added yet; captured output fixtures are the highest-priority testing contribution.
 
 ## Project documentation
@@ -71,4 +88,3 @@ Collectors run independently when the app starts, every five minutes, and when t
 ## License
 
 Released under the [MIT License](LICENSE).
-

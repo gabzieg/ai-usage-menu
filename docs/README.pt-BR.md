@@ -13,14 +13,32 @@ O app reutiliza as contas já autenticadas nos clientes de linha de comando. Ele
 - Xcode 26 ou mais recente para compilar
 - Um ou mais clientes instalados e autenticados: `codex`, `claude` e `agy`
 
-## Como executar
+## Clonar e executar
+
+O repositório já está pronto para compilação. O projeto do Xcode, o target para
+macOS, o scheme compartilhado, o catálogo de assets, o ícone e a configuração
+da barra de menus já estão versionados. Depois de clonar, não é necessário
+criar nem configurar nenhum desses itens.
 
 1. Clone o repositório.
-2. Abra `Untitled Project.xcodeproj` no Xcode.
-3. Selecione o scheme `Untitled Project`.
-4. Compile e execute o app para macOS.
+2. Abra o arquivo existente `Untitled Project.xcodeproj` no Xcode.
+3. Use o scheme compartilhado `Untitled Project` que já vem no repositório e
+   escolha **My Mac** como destino.
+4. Pressione **Run** (`Command-R`).
 
-O produto compilado se chama **AI Usage Menu**. O nome interno do projeto foi preservado nesta primeira versão pública para evitar uma migração ruidosa do arquivo de projeto.
+O produto compilado se chama **AI Usage Menu**. O nome interno do projeto e do
+target foi preservado por compatibilidade com a primeira versão pública.
+
+Clonar o repositório fornece o projeto-fonte completo, não instala o aplicativo.
+O Xcode é necessário somente para compilar. Depois disso, o arquivo
+`AI Usage Menu.app` funciona sozinho e o Xcode pode permanecer fechado.
+
+## Aplicativo pré-compilado
+
+Ainda não existe um binário público assinado em GitHub Releases. O aplicativo
+gerado localmente usa assinatura ad hoc, adequada para o Mac que o compilou,
+mas seria bloqueada pelo Gatekeeper em outros Macs. Para oferecer um download
+instalável será necessário um certificado Developer ID e notarização da Apple.
 
 ## Como a captura funciona
 
@@ -41,8 +59,7 @@ Os coletores são executados ao iniciar, a cada cinco minutos e quando o painel 
 - Claude e Gemini dependem do formato visual dos respectivos terminais.
 - O coletor Gemini usa atualmente a tela de quotas do cliente `agy`/Antigravity.
 - O App Sandbox precisa permanecer desativado para localizar e executar os CLIs locais.
-- Ainda não existe atualização automática do aplicativo.
+- Ainda não existe atualização automática nem uma versão pública assinada.
 - Testes automatizados dos parsers ainda precisam ser adicionados.
 
 O projeto usa a [licença MIT](../LICENSE).
-
