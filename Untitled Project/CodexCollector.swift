@@ -59,40 +59,22 @@ nonisolated struct CodexCollector: UsageCollector {
 
     private static func makeUsage(from result: RateLimitsResult) -> ProviderUsage {
         let main = result.rateLimits
-        var limits = windows(of: main).map { window, slot in
+        let limits = windows(of: main).map { window, slot in
             UsageLimit(
                 id: slot == "primary" ? "codex-session" : "codex-weekly",
                 name: windowName(minutes: window.windowDurationMins) ?? (slot == "primary" ? "Sessão" : "Semanal"),
                 detail: nil,
+                window: slot == "primary" ? .session : .weekly,
                 usedPercentage: Int(window.usedPercent.rounded()),
                 resetsAt: window.resetsAt.map { Date(timeIntervalSince1970: $0) }
             )
-        }
-
-        // Model-specific limits, when the account has them, go to the Models tab.
-        let extras = (result.rateLimitsByLimitId ?? [:])
-            .filter { $0.key != main.limitId }
-            .sorted { $0.key < $1.key }
-
-        for (limitID, snapshot) in extras {
-            for (window, slot) in windows(of: snapshot) {
-                limits.append(
-                    UsageLimit(
-                        id: "codex-\(limitID)-\(slot)",
-                        name: snapshot.limitName ?? limitID,
-                        detail: windowName(minutes: window.windowDurationMins),
-                        usedPercentage: Int(window.usedPercent.rounded()),
-                        resetsAt: window.resetsAt.map { Date(timeIntervalSince1970: $0) }
-                    )
-                )
-            }
         }
 
         return ProviderUsage(
             id: "codex",
             name: "Codex",
             plan: main.planType.map { "ChatGPT \($0.capitalized)" } ?? "ChatGPT",
-            symbolName: "terminal.fill",
+            icon: .symbol("terminal.fill"),
             tint: .gray,
             sessionState: .active,
             limits: limits
@@ -134,12 +116,9 @@ private nonisolated struct RPCError: Decodable {
 
 private nonisolated struct RateLimitsResult: Decodable {
     let rateLimits: Snapshot
-    let rateLimitsByLimitId: [String: Snapshot]?
 }
 
 private nonisolated struct Snapshot: Decodable {
-    let limitId: String?
-    let limitName: String?
     let primary: Window?
     let secondary: Window?
     let planType: String?

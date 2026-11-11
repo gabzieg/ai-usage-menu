@@ -1,90 +1,159 @@
 # AI Usage Menu
 
-A compact, native macOS menu bar app that shows the remaining session and weekly usage for Codex, Claude, and Gemini.
+Aplicativo nativo de barra de menus para macOS que exibe em tempo real as cotas de sessão (5h) e semanais do **Codex**, **Claude** e **Gemini**, além do **contexto das conversas ativas**, **consumo diário de tokens por projeto/sessão** e **status do ecossistema Friday**.
 
-The app reuses the accounts already authenticated in local command-line clients. It does not ask for API keys, copy login tokens, send prompts, or consume model tokens to refresh the display.
+O app reutiliza as sessões já autenticadas nos clientes de linha de comando locais e lê arquivos locais de sessão/estado em modo somente-leitura — **sem pedir chaves de API, sem enviar prompts e sem gastar nenhum token**.
 
 > [!IMPORTANT]
-> This is an unofficial community project. It is not affiliated with OpenAI, Anthropic, or Google. CLI output and private/local protocols can change without notice and may temporarily break a collector.
+> Projeto comunitário não oficial, sem afiliação com OpenAI, Anthropic ou Google. Mudanças na saída das CLIs podem exigir ajustes nos coletores.
 
-## What it shows
+---
 
-- Session and weekly availability at a glance
-- Time remaining until each limit resets
-- Model-specific limits when the provider exposes them
-- The lowest remaining quota directly in the menu bar
-- Codex in gray, Claude in orange, and Gemini in blue
+## O que o aplicativo mostra (v2)
 
-## Requirements
+- **Aba Cotas**
+  - Disponibilidade da janela de 5 horas e semanal para **Codex** (cinza), **Claude** (laranja) e **Gemini** (azul).
+  - Tempo restante até a renovação de cada janela e detalhamento por grupo de modelos.
+  - Menor porcentagem restante sempre visível no ícone da barra de menus.
+  - Banner de alerta rápido quando alguma sessão na Friday está aguardando você.
+  - Lista de **Conversas Ativas** com tamanho atual do contexto.
+- **Aba Sessões**
+  - **Conversas Ativas** (Codex e Claude Code com processo vivo): lê os últimos 3 MB do transcript `.jsonl` de cada conversa aberta e exibe o tamanho atual do contexto com alertas em **300 mil tokens** (compactar na troca) e **500 mil tokens** (compactação imediata).
+  - **Consumo do Dia** (`friday-usage`): total de tokens gastos no dia separados entre **Novo**, **Cache lido**, **Cache gravado** e **Saída**, custo em dólar declarado pelo Claude Code (`cost-state`) e detalhamento por projeto e por sessão.
+- **Aba Friday**
+  - **Esperando Você**: sessões travadas aguardando decisão (`friday-pending`) e correio não lido há mais de 30 minutos (`friday-mail`), além de mensagens aguardando sessões fechadas.
+  - **Saúde & Backup**: status do `friday-doctor`, resultado da suíte de testes (`friday-test`) e progresso/último snapshot do backup criptografado no Drive (`friday-backup`).
+  - **Jobs do Friday**: estado ao vivo dos `LaunchAgents` (`com.gbz.*`) via `launchctl`.
 
-- macOS 14 or newer
-- Xcode 26 or newer to build from source
-- At least one supported CLI installed and logged in:
-  - `codex` for Codex
-  - `claude` for Claude Code
-  - `agy` for Gemini/Antigravity quotas
+---
 
-The app searches common executable locations such as `~/.local/bin`, `~/.npm-global/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`.
+## Requisitos
 
-## Clone and run
+- **macOS 14** ou superior
+- **Xcode 26** ou superior para compilar a partir do código-fonte
+- Pelo menos uma das CLIs suportadas instalada e autenticada:
+  - `codex` (Codex CLI)
+  - `claude` (Claude Code)
+  - `agy` (Antigravity / Gemini)
+- *(Opcional)* **Friday** instalada em `~/Friday` e `~/.local/state/friday-*` para preencher o histórico diário e a aba Friday.
 
-The repository is build-ready. The Xcode project, macOS target, shared scheme,
-asset catalog, app icon, and menu bar configuration are already committed. You
-do not need to create or configure any of them after cloning.
+O app procura os executáveis automaticamente em `~/.local/bin`, `~/.npm-global/bin`, `/opt/homebrew/bin` e `/usr/local/bin`.
 
-1. Clone the repository.
-2. Open the existing `Untitled Project.xcodeproj` file in Xcode.
-3. Use the existing shared `Untitled Project` scheme and choose **My Mac** as
-   the run destination.
-4. Press **Run** (`Command-R`).
+---
 
-The built product is named **AI Usage Menu**. The internal Xcode project and
-target names are retained for compatibility with the first public version.
+## Passo a passo: Como compilar e rodar o aplicativo
 
-Cloning provides the complete source project, not an installed application.
-Xcode is required only to compile the source. After building, the generated
-`AI Usage Menu.app` runs independently and Xcode can remain closed.
+### Opção A — Pelo Xcode
 
-## Prebuilt application
+1. Clone o repositório:
+   ```bash
+   git clone https://github.com/gabzieg/ai-usage-menu.git
+   cd ai-usage-menu
+   ```
+2. Abra o projeto no Xcode:
+   ```bash
+   open "Untitled Project.xcodeproj"
+   ```
+3. Selecione o esquema **Untitled Project** e o destino **My Mac**.
+4. Pressione **Command-R** (`Run`) para compilar e abrir o **AI Usage Menu** na barra de menus.
 
-There is currently no signed public binary in GitHub Releases. The locally
-built app uses ad hoc signing, which is appropriate for the Mac that built it
-but would be blocked by Gatekeeper on other Macs. A downloadable release will
-require a Developer ID certificate and Apple notarization.
+### Opção B — Gerar e instalar em `/Applications` pelo Terminal
 
-No developer account is required for a local Debug build. Distribution requires your own signing identity and bundle identifier.
+Para instalar uma versão independente em `/Applications/AI Usage Menu.app` (sem precisar manter o Xcode aberto):
 
-## Authentication and data access
+```bash
+xcodebuild -project "Untitled Project.xcodeproj" \
+  -scheme "Untitled Project" \
+  -configuration Release \
+  -derivedDataPath build \
+  build
 
-AI Usage Menu never performs a new login. Authenticate with each CLI normally before opening the app. The collectors then invoke those local clients with a minimal environment:
+cp -R "build/Build/Products/Release/AI Usage Menu.app" /Applications/
+open "/Applications/AI Usage Menu.app"
+```
 
-| Provider | Local command | Read operation |
+---
+
+## Passo a passo: Iniciar sempre junto com o Mac
+
+Depois de copiar o `AI Usage Menu.app` para `/Applications`, você pode configurá-lo para iniciar automaticamente ao ligar o computador de duas maneiras:
+
+### Método 1 — Pelos Ajustes do Sistema do macOS (Mais simples)
+
+1. Abra os **Ajustes do Sistema** (*System Settings*).
+2. Vá em **Geral** → **Itens de Início e Extensões** (*Login Items & Extensions*).
+3. Na seção **Abrir no Início da Sessão** (*Open at Login*), clique no botão **`+`**.
+4. Selecione **`/Applications/AI Usage Menu.app`** e clique em **Adicionar**.
+
+### Método 2 — Criando um LaunchAgent (`launchctl`)
+
+Se preferir gerenciar via `LaunchAgents` (no mesmo padrão dos jobs `com.gbz.*` da Friday, reiniciando automaticamente caso o processo seja fechado por engano):
+
+1. Crie o arquivo `~/Library/LaunchAgents/com.gbz.ai-usage-menu.plist`:
+   ```bash
+   cat << 'EOF' > ~/Library/LaunchAgents/com.gbz.ai-usage-menu.plist
+   <?xml version="1.0" encoding="UTF-8"?>
+   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+   <plist version="1.0">
+   <dict>
+       <key>Label</key>
+       <string>com.gbz.ai-usage-menu</string>
+       <key>ProgramArguments</key>
+       <array>
+           <string>/Applications/AI Usage Menu.app/Contents/MacOS/AI Usage Menu</string>
+       </array>
+       <key>RunAtLoad</key>
+       <true/>
+       <key>KeepAlive</key>
+       <false/>
+       <key>ProcessType</key>
+       <string>Interactive</string>
+   </dict>
+   </plist>
+   EOF
+   ```
+2. Carregue e ative a tarefa no `launchctl`:
+   ```bash
+   launchctl unload ~/Library/LaunchAgents/com.gbz.ai-usage-menu.plist 2>/dev/null || true
+   launchctl load ~/Library/LaunchAgents/com.gbz.ai-usage-menu.plist
+   ```
+
+Para desativar no futuro, basta rodar:
+```bash
+launchctl unload ~/Library/LaunchAgents/com.gbz.ai-usage-menu.plist
+rm ~/Library/LaunchAgents/com.gbz.ai-usage-menu.plist
+```
+
+---
+
+## Autenticação e acesso aos dados
+
+O AI Usage Menu nunca faz login por conta própria nem consome tokens de modelos:
+
+| Fonte | Comando / Arquivo local | Operação de leitura |
 | --- | --- | --- |
-| Codex | `codex app-server` | `account/rateLimits/read` JSON-RPC request |
-| Claude | `claude` | Opens the read-only `/usage` screen in a pseudo-terminal |
-| Gemini | `agy` | Opens the `/quota` screen in a pseudo-terminal |
+| **Codex (Cota)** | `codex app-server` | Requisição JSON-RPC `account/rateLimits/read` |
+| **Claude (Cota)** | `claude` | Abre a tela `/usage` em pseudo-terminal somente-leitura |
+| **Gemini (Cota)** | `agy` | Abre a tela `/quota` em pseudo-terminal somente-leitura |
+| **Conversas Ativas** | `~/.local/state/friday-sessions/*.json`<br>`~/.claude/sessions/*.json` | Verifica `pid` vivo (`kill -0`) e lê os últimos 3 MB do `.jsonl` da conversa |
+| **Consumo & Friday** | `~/.local/state/friday-*`<br>`~/Library/Logs/friday-*.state` | Lê os JSONs locais gerados pelos serviços da Friday |
 
-Only quota values, plan labels, and reset times are parsed. No prompt is submitted. Credentials remain managed by each provider's CLI. See [Privacy](docs/PRIVACY.md) for the complete data flow.
+---
 
-## Refresh behavior
+## Comportamento de atualização
 
-Collectors run independently when the app starts, every five minutes, and when the panel opens with data older than one minute. A failed refresh keeps the last valid reading. If no valid reading exists, selecting the provider card shows the collector error.
+- As leituras locais (conversas ativas e estado da Friday) são atualizadas instantaneamente ao abrir o painel (com cache de 60 segundos) e a cada clique em **Atualizar**.
+- Os coletores de cota das CLIs rodam em paralelo ao iniciar o app, a cada 5 minutos e ao abrir o painel quando a última leitura tem mais de 1 minuto.
 
-## Known limitations
+---
 
-- Claude and Gemini collectors parse terminal interfaces. UI changes in their CLIs can require parser updates.
-- The Gemini collector currently targets the quota view exposed by the `agy` Antigravity client.
-- The app must run without App Sandbox so it can locate and launch locally installed CLIs and let them access their existing authentication state.
-- There is no automatic updater or signed public release yet. Repository notifications are the current source of update information.
-- Automated parser tests have not been added yet; captured output fixtures are the highest-priority testing contribution.
-
-## Project documentation
+## Documentação do projeto
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Privacy and security](docs/PRIVACY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 
-## License
+## Licença
 
-Released under the [MIT License](LICENSE).
+Distribuído sob a [MIT License](LICENSE).

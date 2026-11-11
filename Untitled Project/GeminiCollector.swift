@@ -84,16 +84,45 @@ nonisolated struct GeminiCollector: UsageCollector {
 }
 
 nonisolated enum GeminiQuotaParser {
+    /// Antigravity groups models into three quota buckets (`GEMINI 4 ARGON`,
+    /// `GEMINI MODELS`, and `CLAUDE AND GPT MODELS`, where Claude and GPT share
+    /// a single combined quota).
+    private enum ModelGroup: String, CaseIterable {
+        case argon
+        case flash
+        case claudeAndGPT = "claude-gpt"
+
+        var displayName: String {
+            switch self {
+            case .argon: "Argon"
+            case .flash: "Flash"
+            case .claudeAndGPT: "Claude e GPT"
+            }
+        }
+
+        static func matching(header: String) -> ModelGroup? {
+            if header.contains("ARGON") {
+                return .argon
+            }
+            if header == "GEMINI MODELS" || header.contains("FLASH") {
+                return .flash
+            }
+            if header.contains("CLAUDE") || header.contains("GPT") {
+                return .claudeAndGPT
+            }
+            return nil
+        }
+    }
+
     private struct Entry {
-        let group: String
-        let label: String
+        let group: ModelGroup
+        let window: LimitWindow
         let remaining: Double
         let resetsAt: Date?
     }
 
     private static let percentPattern = try! NSRegularExpression(pattern: #"(\d{1,3}(?:\.\d+)?)\s*%"#)
     private static let durationPattern = try! NSRegularExpression(pattern: #"(\d+)\s*(d|h|m|s)"#)
-    private static let mainGroup = "GEMINI MODELS"
 
     static func makeUsage(from screen: String, now: Date) throws -> ProviderUsage {
         let entries = entries(in: screen, now: now)
@@ -101,32 +130,30 @@ nonisolated enum GeminiQuotaParser {
             throw CollectorError.unexpectedOutput("tela de /quota sem grupos de cota")
         }
 
-        // The card features the most consumed group, so it reflects what is
-        // actually being used (the Xcode agent, for instance, runs on Argon).
-        // Ties, including "nothing used yet", fall back to the Gemini group.
-        let featured = featuredGroup(in: entries)
-        let featuredName = displayName(forGroup: featured)
-
+        // Order groups consistently as Argon → Flash → Claude e GPT, and show
+        // the 5-hour session window before the weekly window within each group.
         var limits: [UsageLimit] = []
-        for entry in entries where entry.group == featured {
-            limits.append(
-                isFiveHour(entry.label)
-                    ? limit(from: entry, id: "gemini-session", name: "Sessão de 5 horas", detail: featuredName)
-                    : limit(from: entry, id: "gemini-weekly", name: "Limite semanal", detail: featuredName)
-            )
-        }
+        for group in ModelGroup.allCases {
+            let groupEntries = entries
+                .filter { $0.group == group }
+                .sorted { lhs, rhs in
+                    lhs.window == .session && rhs.window == .weekly
+                }
 
-        // The other groups go to the Models tab.
-        for entry in entries where entry.group != featured {
-            let kind = isFiveHour(entry.label) ? "5 horas" : "Semanal"
-            limits.append(
-                limit(
-                    from: entry,
-                    id: "gemini-\(entry.group.lowercased().replacingOccurrences(of: " ", with: "-"))-\(kind)",
-                    name: displayName(forGroup: entry.group),
-                    detail: kind
+            for entry in groupEntries {
+                let kind = entry.window == .session ? "session" : "weekly"
+                let detail = entry.window == .session ? "Sessão de 5 horas" : "Semanal"
+                limits.append(
+                    UsageLimit(
+                        id: "gemini-\(group.rawValue)-\(kind)",
+                        name: group.displayName,
+                        detail: detail,
+                        window: entry.window,
+                        usedPercentage: Int((100 - entry.remaining).rounded()),
+                        resetsAt: entry.resetsAt
+                    )
                 )
-            )
+            }
         }
 
         let plan = screen.contains("Google AI Ultra") ? "Google AI Ultra"
@@ -137,7 +164,7 @@ nonisolated enum GeminiQuotaParser {
             id: "gemini",
             name: "Gemini",
             plan: plan,
-            symbolName: "sparkle",
+            icon: .symbol("sparkle"),
             tint: .blue,
             sessionState: .active,
             limits: limits
@@ -157,14 +184,18 @@ nonisolated enum GeminiQuotaParser {
             .filter { !$0.isEmpty }
 
         var entries: [Entry] = []
-        var group: String?
+        var rawGroup: String?
         var label: String?
         var remaining: Double?
         var resetsAt: Date?
 
         func flush() {
-            if let group, let label, let remaining {
-                entries.append(Entry(group: group, label: label, remaining: remaining, resetsAt: resetsAt))
+            if let rawGroup,
+               let group = ModelGroup.matching(header: rawGroup),
+               let label,
+               let remaining {
+                let window: LimitWindow = isFiveHour(label) ? .session : .weekly
+                entries.append(Entry(group: group, window: window, remaining: remaining, resetsAt: resetsAt))
             }
             label = nil
             remaining = nil
@@ -174,7 +205,7 @@ nonisolated enum GeminiQuotaParser {
         for line in lines {
             if isGroupHeader(line) {
                 flush()
-                group = line
+                rawGroup = line
             } else if line.contains("Limit"), !line.contains("%") {
                 flush()
                 label = line
@@ -190,16 +221,6 @@ nonisolated enum GeminiQuotaParser {
         return entries
     }
 
-    private static func limit(from entry: Entry, id: String, name: String, detail: String?) -> UsageLimit {
-        UsageLimit(
-            id: id,
-            name: name,
-            detail: detail,
-            usedPercentage: Int((100 - entry.remaining).rounded()),
-            resetsAt: entry.resetsAt
-        )
-    }
-
     private static func isFiveHour(_ label: String) -> Bool {
         label.localizedCaseInsensitiveContains("five hour") || label.localizedCaseInsensitiveContains("5-hour")
     }
@@ -209,38 +230,6 @@ nonisolated enum GeminiQuotaParser {
             && line.uppercased() == line
             && line.contains(where: \.isLetter)
             && line.allSatisfy { $0.isLetter || $0.isNumber || $0 == " " }
-    }
-
-    private static func featuredGroup(in entries: [Entry]) -> String {
-        var highestUse: [String: Double] = [:]
-        var order: [String] = []
-
-        for entry in entries {
-            if highestUse[entry.group] == nil { order.append(entry.group) }
-            highestUse[entry.group] = max(highestUse[entry.group] ?? 0, 100 - entry.remaining)
-        }
-
-        // On ties the Gemini group wins, then screen order: `max(by:)` keeps
-        // the first of equal elements.
-        let candidates = order.filter { $0 == mainGroup } + order.filter { $0 != mainGroup }
-        return candidates.max { (highestUse[$0] ?? 0) < (highestUse[$1] ?? 0) } ?? mainGroup
-    }
-
-    /// "GEMINI MODELS" → "Gemini Flash e Pro", "CLAUDE AND GPT MODELS" →
-    /// "Claude e GPT", "GEMINI 4 ARGON" → "Gemini 4 Argon".
-    private static func displayName(forGroup group: String) -> String {
-        if group == mainGroup { return "Gemini Flash e Pro" }
-        return group
-            .replacingOccurrences(of: " MODELS", with: "")
-            .split(separator: " ")
-            .map { word in
-                switch word {
-                case "GPT", "OSS": String(word)
-                case "AND": "e"
-                default: word.capitalized
-                }
-            }
-            .joined(separator: " ")
     }
 
     private static func percentage(in line: String) -> Double? {

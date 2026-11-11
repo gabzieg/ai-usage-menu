@@ -52,8 +52,8 @@ nonisolated struct ClaudeCollector: UsageCollector {
         }
         guard loaded else { throw CollectorError.timedOut }
 
-        // Model-specific weekly rows are drawn right after the general one.
-        session.readUntilQuiet(1, timeout: 4)
+        // Wait briefly so the reset date at the end of the weekly row finishes drawing.
+        session.readUntilQuiet(0.5, timeout: 3)
         session.send("\u{1b}")
         return session.text
     }
@@ -89,15 +89,14 @@ nonisolated enum ClaudeUsageParser {
             id: "claude",
             name: "Claude",
             plan: plan,
-            symbolName: "brain.head.profile.fill",
+            icon: .asset("ClaudeIcon"),
             tint: .orange,
             sessionState: .active,
             limits: limits
         )
     }
 
-    /// Session first and the all-models week second, as the cards expect;
-    /// model-specific weeks follow for the Models tab.
+    /// Returns the 5-hour session limit and the general all-models weekly limit.
     static func limits(in screen: String, now: Date) -> [UsageLimit] {
         let range = NSRange(screen.startIndex..., in: screen)
         var latest: [String: UsageLimit] = [:]
@@ -116,21 +115,31 @@ nonisolated enum ClaudeUsageParser {
                 now: now
             )
 
-            let limit: UsageLimit
             switch scope {
             case nil:
-                limit = UsageLimit(id: "claude-session", name: "Sessão de 5 horas", detail: nil, usedPercentage: percentage, resetsAt: resetsAt)
+                latest["claude-session"] = UsageLimit(
+                    id: "claude-session",
+                    name: "Sessão de 5 horas",
+                    detail: nil,
+                    window: .session,
+                    usedPercentage: percentage,
+                    resetsAt: resetsAt
+                )
             case "all models"?:
-                limit = UsageLimit(id: "claude-weekly", name: "Todos os modelos", detail: "Semanal", usedPercentage: percentage, resetsAt: resetsAt)
-            case let model?:
-                limit = UsageLimit(id: "claude-weekly-\(model)", name: model.capitalized, detail: "Semanal", usedPercentage: percentage, resetsAt: resetsAt)
+                latest["claude-weekly"] = UsageLimit(
+                    id: "claude-weekly",
+                    name: "Todos os modelos",
+                    detail: "Semanal",
+                    window: .weekly,
+                    usedPercentage: percentage,
+                    resetsAt: resetsAt
+                )
+            default:
+                break
             }
-
-            latest[limit.id] = limit
         }
 
-        let ordered = ["claude-session", "claude-weekly"].compactMap { latest.removeValue(forKey: $0) }
-        return ordered + latest.values.sorted { $0.name < $1.name }
+        return ["claude-session", "claude-weekly"].compactMap { latest[$0] }
     }
 
     /// Accepts "5:10pm", "3am", "Oct 23 at 3am" and "Oct 23, 3:30pm".

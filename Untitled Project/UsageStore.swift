@@ -8,20 +8,33 @@ final class UsageStore {
     private static let minimumAgeOnOpen: TimeInterval = 60
 
     private(set) var providers: [ProviderUsage]
+    private(set) var activeConversations: [ActiveConversation]
+    private(set) var fridaySnapshot: FridaySnapshot
     private(set) var lastUpdated: Date?
+    private(set) var lastConversationsUpdated: Date?
     private(set) var isRefreshing = false
 
     private let collectors: [any UsageCollector]
+    private let conversationCollector: ActiveConversationCollector?
+    private let fridayCollector: FridayStateCollector?
     private var refreshLoop: Task<Void, Never>?
 
     init(
         providers: [ProviderUsage] = ProviderUsage.placeholders,
-        collectors: [any UsageCollector] = [CodexCollector(), ClaudeCollector(), GeminiCollector()]
+        activeConversations: [ActiveConversation] = [],
+        fridaySnapshot: FridaySnapshot = .empty,
+        collectors: [any UsageCollector] = [CodexCollector(), ClaudeCollector(), GeminiCollector()],
+        conversationCollector: ActiveConversationCollector? = ActiveConversationCollector(),
+        fridayCollector: FridayStateCollector? = FridayStateCollector()
     ) {
         self.providers = providers
+        self.activeConversations = activeConversations
+        self.fridaySnapshot = fridaySnapshot
         self.collectors = collectors
+        self.conversationCollector = conversationCollector
+        self.fridayCollector = fridayCollector
 
-        guard !collectors.isEmpty else { return }
+        guard !collectors.isEmpty || conversationCollector != nil || fridayCollector != nil else { return }
         refreshLoop = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
@@ -41,19 +54,48 @@ final class UsageStore {
     }
 
     /// Called when the panel opens, so it never shows data older than a minute
-    /// without spawning the CLIs on every click.
+    /// without spawning the CLIs on every click. Matches Friday's 60s cache.
     func refreshIfStale() async {
+        if let lastConversationsUpdated,
+           Date().timeIntervalSince(lastConversationsUpdated) < Self.minimumAgeOnOpen {
+            // Local state is fresh (<= 60s).
+        } else {
+            await refreshLocalState()
+        }
+
         if let lastUpdated, Date().timeIntervalSince(lastUpdated) < Self.minimumAgeOnOpen {
             return
         }
         await refresh()
     }
 
+    func refreshLocalState() async {
+        async let conversationsTask = conversationCollector?.fetchActiveConversations()
+        async let fridayTask = fridayCollector?.fetchSnapshot()
+
+        if let conversations = await conversationsTask {
+            activeConversations = conversations
+        }
+        if let snapshot = await fridayTask {
+            fridaySnapshot = snapshot
+        }
+        if conversationCollector != nil || fridayCollector != nil {
+            lastConversationsUpdated = Date()
+        }
+    }
+
     func refresh() async {
-        guard !isRefreshing, !collectors.isEmpty else { return }
+        guard !isRefreshing else { return }
+        guard !collectors.isEmpty || conversationCollector != nil || fridayCollector != nil else { return }
 
         isRefreshing = true
         defer { isRefreshing = false }
+
+        // Local transcript & state reading finishes in milliseconds; run it
+        // immediately so active conversations and Friday state update before slow PTY collectors.
+        await refreshLocalState()
+
+        guard !collectors.isEmpty else { return }
 
         var receivedLiveData = false
         await withTaskGroup(of: (String, Result<ProviderUsage, any Error>).self) { group in
@@ -101,7 +143,7 @@ nonisolated struct ProviderUsage: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
     let plan: String
-    let symbolName: String
+    let icon: ProviderIcon
     let tint: ProviderTint
     let sessionState: SessionState
     let limits: [UsageLimit]
@@ -111,20 +153,25 @@ nonisolated struct ProviderUsage: Identifiable, Equatable, Sendable {
         return reason
     }
 
-    // Limits are found by id ("<provider>-session", "<provider>-weekly")
-    // instead of position, so a provider may lack one of them (Gemini's
-    // Argon group, for example, has only a weekly window).
+    /// Summary card shows the most consumed 5-hour session window (especially
+    /// relevant for Gemini, where multiple model groups have separate windows).
     var sessionLimit: UsageLimit? {
-        limits.first { $0.id == "\(id)-session" }
+        limits
+            .filter { $0.window == .session }
+            .max { $0.usedPercentage < $1.usedPercentage }
     }
 
+    /// Summary card shows Argon's weekly window for Gemini, or the most
+    /// consumed weekly window otherwise.
     var weeklyLimit: UsageLimit? {
-        limits.first { $0.id == "\(id)-weekly" }
-    }
+        if id == "gemini",
+           let argonWeekly = limits.first(where: { $0.id == "gemini-argon-weekly" && $0.window == .weekly }) {
+            return argonWeekly
+        }
 
-    /// Everything that is not the main session or week: the Models tab.
-    var modelLimits: [UsageLimit] {
-        limits.filter { $0.id != "\(id)-session" && $0.id != "\(id)-weekly" }
+        return limits
+            .filter { $0.window == .weekly }
+            .max { $0.usedPercentage < $1.usedPercentage }
     }
 
     func unavailable(_ reason: String) -> ProviderUsage {
@@ -132,7 +179,7 @@ nonisolated struct ProviderUsage: Identifiable, Equatable, Sendable {
             id: id,
             name: name,
             plan: plan,
-            symbolName: symbolName,
+            icon: icon,
             tint: tint,
             sessionState: .unavailable(reason),
             limits: []
@@ -140,10 +187,21 @@ nonisolated struct ProviderUsage: Identifiable, Equatable, Sendable {
     }
 }
 
+nonisolated enum ProviderIcon: Equatable, Sendable {
+    case symbol(String)
+    case asset(String)
+}
+
+nonisolated enum LimitWindow: Equatable, Sendable {
+    case session
+    case weekly
+}
+
 nonisolated struct UsageLimit: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
     let detail: String?
+    let window: LimitWindow
     let usedPercentage: Int
     let resetsAt: Date?
 
@@ -179,11 +237,10 @@ nonisolated enum ProviderTint: Equatable, Sendable {
 nonisolated extension ProviderUsage {
     /// Shown until the first reading arrives.
     static let placeholders: [ProviderUsage] = [
-        ProviderUsage(id: "codex", name: "Codex", plan: "ChatGPT", symbolName: "terminal.fill", tint: .gray, sessionState: .unavailable("Carregando"), limits: []),
-        ProviderUsage(id: "claude", name: "Claude", plan: "Pro / Max", symbolName: "brain.head.profile.fill", tint: .orange, sessionState: .unavailable("Carregando"), limits: []),
-        ProviderUsage(id: "gemini", name: "Gemini", plan: "Google AI Pro", symbolName: "sparkle", tint: .blue, sessionState: .unavailable("Carregando"), limits: [])
+        ProviderUsage(id: "codex", name: "Codex", plan: "ChatGPT", icon: .symbol("terminal.fill"), tint: .gray, sessionState: .unavailable("Carregando"), limits: []),
+        ProviderUsage(id: "claude", name: "Claude", plan: "Pro / Max", icon: .asset("ClaudeIcon"), tint: .orange, sessionState: .unavailable("Carregando"), limits: []),
+        ProviderUsage(id: "gemini", name: "Gemini", plan: "Google AI Pro", icon: .symbol("sparkle"), tint: .blue, sessionState: .unavailable("Carregando"), limits: [])
     ]
-
 
     static let previewData: [ProviderUsage] = {
         let now = Date()
@@ -193,7 +250,7 @@ nonisolated extension ProviderUsage {
                 id: "codex",
                 name: "Codex",
                 plan: "ChatGPT",
-                symbolName: "terminal.fill",
+                icon: .symbol("terminal.fill"),
                 tint: .gray,
                 sessionState: .active,
                 limits: [
@@ -201,6 +258,7 @@ nonisolated extension ProviderUsage {
                         id: "codex-session",
                         name: "Sessão de 5 horas",
                         detail: nil,
+                        window: .session,
                         usedPercentage: 34,
                         resetsAt: now.addingTimeInterval(2 * 60 * 60 + 18 * 60)
                     ),
@@ -208,6 +266,7 @@ nonisolated extension ProviderUsage {
                         id: "codex-weekly",
                         name: "Limite semanal",
                         detail: nil,
+                        window: .weekly,
                         usedPercentage: 61,
                         resetsAt: now.addingTimeInterval(3 * 24 * 60 * 60 + 7 * 60 * 60)
                     )
@@ -217,7 +276,7 @@ nonisolated extension ProviderUsage {
                 id: "claude",
                 name: "Claude",
                 plan: "Pro / Max",
-                symbolName: "brain.head.profile.fill",
+                icon: .asset("ClaudeIcon"),
                 tint: .orange,
                 sessionState: .active,
                 limits: [
@@ -225,6 +284,7 @@ nonisolated extension ProviderUsage {
                         id: "claude-session",
                         name: "Sessão de 5 horas",
                         detail: nil,
+                        window: .session,
                         usedPercentage: 52,
                         resetsAt: now.addingTimeInterval(54 * 60)
                     ),
@@ -232,14 +292,8 @@ nonisolated extension ProviderUsage {
                         id: "claude-weekly",
                         name: "Todos os modelos",
                         detail: "Semanal",
+                        window: .weekly,
                         usedPercentage: 27,
-                        resetsAt: now.addingTimeInterval(5 * 24 * 60 * 60)
-                    ),
-                    UsageLimit(
-                        id: "claude-sonnet",
-                        name: "Sonnet",
-                        detail: "Semanal",
-                        usedPercentage: 18,
                         resetsAt: now.addingTimeInterval(5 * 24 * 60 * 60)
                     )
                 ]
@@ -247,52 +301,50 @@ nonisolated extension ProviderUsage {
             ProviderUsage(
                 id: "gemini",
                 name: "Gemini",
-                plan: "Google",
-                symbolName: "sparkle",
+                plan: "Google AI Pro",
+                icon: .symbol("sparkle"),
                 tint: .blue,
                 sessionState: .active,
                 limits: [
                     UsageLimit(
-                        id: "gemini-session",
-                        name: "Sessão",
-                        detail: "Janela atual",
-                        usedPercentage: 29,
-                        resetsAt: now.addingTimeInterval(3 * 60 * 60 + 12 * 60)
+                        id: "gemini-argon-weekly",
+                        name: "Argon",
+                        detail: "Semanal",
+                        window: .weekly,
+                        usedPercentage: 84,
+                        resetsAt: now.addingTimeInterval(46 * 60 * 60 + 47 * 60)
                     ),
                     UsageLimit(
-                        id: "gemini-weekly",
-                        name: "Limite semanal",
-                        detail: "Todos os modelos",
-                        usedPercentage: 38,
-                        resetsAt: now.addingTimeInterval(4 * 24 * 60 * 60)
+                        id: "gemini-flash-session",
+                        name: "Flash",
+                        detail: "Sessão de 5 horas",
+                        window: .session,
+                        usedPercentage: 0,
+                        resetsAt: nil
                     ),
                     UsageLimit(
-                        id: "gemini-pro",
-                        name: "Gemini Pro",
-                        detail: "Solicitações",
-                        usedPercentage: 46,
-                        resetsAt: now.addingTimeInterval(11 * 60 * 60)
+                        id: "gemini-flash-weekly",
+                        name: "Flash",
+                        detail: "Semanal",
+                        window: .weekly,
+                        usedPercentage: 1,
+                        resetsAt: now.addingTimeInterval(51 * 60 * 60 + 44 * 60)
                     ),
                     UsageLimit(
-                        id: "gemini-flash",
-                        name: "Gemini Flash",
-                        detail: "Solicitações",
-                        usedPercentage: 12,
-                        resetsAt: now.addingTimeInterval(11 * 60 * 60)
+                        id: "gemini-claude-gpt-session",
+                        name: "Claude e GPT",
+                        detail: "Sessão de 5 horas",
+                        window: .session,
+                        usedPercentage: 80,
+                        resetsAt: now.addingTimeInterval(4 * 60 * 60 + 24 * 60)
                     ),
                     UsageLimit(
-                        id: "gemini-context",
-                        name: "Contexto",
-                        detail: "Tokens",
-                        usedPercentage: 8,
-                        resetsAt: now.addingTimeInterval(11 * 60 * 60)
-                    ),
-                    UsageLimit(
-                        id: "gemini-grounding",
-                        name: "Grounding",
-                        detail: "Consultas",
-                        usedPercentage: 71,
-                        resetsAt: now.addingTimeInterval(11 * 60 * 60)
+                        id: "gemini-claude-gpt-weekly",
+                        name: "Claude e GPT",
+                        detail: "Semanal",
+                        window: .weekly,
+                        usedPercentage: 41,
+                        resetsAt: now.addingTimeInterval(167 * 60 * 60 + 24 * 60)
                     )
                 ]
             )
